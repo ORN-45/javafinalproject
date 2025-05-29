@@ -6,12 +6,19 @@ import java.awt.*;
 import java.awt.event.*;
 import javax.swing.event.*;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
+import java.rmi.RemoteException;
 
-import model.Client;
+// Client-side model
+import legalcasemanagementsystemclient.model.Client;
+// Server-side model (aliased)
+import legalcasemanagementsystemserver.model.Client_SERVER; 
+
 import controller.ClientController;
 import view.components.CustomTable;
 import view.components.TableFilterPanel;
-import view.components.StatusIndicator;
+// import view.components.StatusIndicator; // Not used in this panel's table
 import view.util.UIConstants;
 import view.util.SwingUtils;
 
@@ -22,6 +29,7 @@ public class ClientsPanel extends JPanel {
     private ClientController clientController;
     private CustomTable clientsTable;
     private ClientFilterPanel filterPanel;
+    private List<Client> currentlyDisplayedClients; // To store mapped client-side models
     
     private JButton addButton;
     private JButton editButton;
@@ -193,30 +201,42 @@ public class ClientsPanel extends JPanel {
             clientsTable.clearFilters();
             
             // Get clients from controller
-            List<Client> clients;
+            List<Client_SERVER> serverClients = clientController.getAllClients();
+            List<Client> clientClients = new ArrayList<>();
+            if (serverClients != null) {
+                for (Client_SERVER serverClient : serverClients) {
+                    clientClients.add(mapServerClientToClientClient(serverClient));
+                }
+            }
             
             String filterType = filterPanel.getSelectedFilterType();
             String searchText = filterPanel.getSearchText();
-            
+            List<Client> filteredClients = clientClients;
+
             if (searchText != null && !searchText.isEmpty()) {
+                String lowerSearchText = searchText.toLowerCase();
                 if ("Name".equals(filterType)) {
-                    clients = clientController.findClientsByName(searchText);
+                    filteredClients = clientClients.stream()
+                        .filter(c -> c.getName() != null && c.getName().toLowerCase().contains(lowerSearchText))
+                        .collect(Collectors.toList());
                 } else if ("Type".equals(filterType)) {
-                    clients = clientController.findClientsByType(searchText);
-                } else {
-                    // Apply filter to the view instead of database for "All"
-                    clients = clientController.getAllClients();
-                    clientsTable.addFilter(2, searchText); // Client Type column
-                    clientsTable.addFilter(1, searchText); // Name column
+                     filteredClients = clientClients.stream()
+                        .filter(c -> c.getClientType() != null && c.getClientType().toLowerCase().contains(lowerSearchText))
+                        .collect(Collectors.toList());
+                } else { // "All" - filter locally across multiple relevant fields if desired
+                    filteredClients = clientClients.stream()
+                        .filter(c -> (c.getName() != null && c.getName().toLowerCase().contains(lowerSearchText)) ||
+                                     (c.getClientId() != null && c.getClientId().toLowerCase().contains(lowerSearchText)) ||
+                                     (c.getEmail() != null && c.getEmail().toLowerCase().contains(lowerSearchText)) ||
+                                     (c.getClientType() != null && c.getClientType().toLowerCase().contains(lowerSearchText)))
+                        .collect(Collectors.toList());
                 }
-            } else {
-                clients = clientController.getAllClients();
             }
             
             // Populate table
-            for (Client client : clients) {
+            for (Client client : filteredClients) {
                 Object[] row = {
-                    client.getClientId(),
+                    client.getClientId(), // This is the String client ID (business key)
                     client.getName(),
                     client.getClientType(),
                     client.getContactPerson() != null ? client.getContactPerson() : "",
@@ -228,7 +248,7 @@ public class ClientsPanel extends JPanel {
             }
             
             // Display a message if no clients found
-            if (clients.isEmpty() && (searchText == null || searchText.isEmpty())) {
+            if (filteredClients.isEmpty() && (searchText == null || searchText.isEmpty())) {
                 SwingUtils.showInfoMessage(
                     this,
                     "No clients found. Add a new client to get started.",
@@ -239,12 +259,11 @@ public class ClientsPanel extends JPanel {
             // Update button states
             updateButtonStates();
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with the server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error loading clients: " + e.getMessage(),
-                "Database Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error loading clients: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -268,29 +287,36 @@ public class ClientsPanel extends JPanel {
             return;
         }
         
-        // Get client ID from selected row
-        String clientId = clientsTable.getValueAt(selectedRow, 0).toString();
+        // Get client ID (String version like "CL001") from selected row
+        String clientBusinessId = clientsTable.getValueAt(selectedRow, 0).toString();
+        Client selectedClient = getClientFromDisplayedList(clientBusinessId);
+
+        if (selectedClient == null) {
+            SwingUtils.showErrorMessage(this, "Could not retrieve details for client ID: " + clientBusinessId, "Error");
+            return;
+        }
         
         try {
-            // Get the client
-            Client client = clientController.getClientByClientId(clientId);
+            // Fetch the latest server version of the client using its integer PK for the dialog
+            Client_SERVER serverClient = clientController.getClientById(selectedClient.getId()); // uses int PK
             
-            if (client != null) {
-                // Open client details dialog
+            if (serverClient != null) {
+                Client clientForDialog = mapServerClientToClientClient(serverClient);
                 ClientDetailsDialog dialog = new ClientDetailsDialog(
-                    SwingUtilities.getWindowAncestor(this), client);
+                    SwingUtilities.getWindowAncestor(this), clientForDialog);
                 dialog.setVisible(true);
                 
-                // Refresh the clients list after the dialog is closed
-                loadClients();
+                // No need to reload all clients after just viewing details typically
+                // loadClients(); 
+            } else {
+                 SwingUtils.showErrorMessage(this, "Client details not found on server.", "Error");
             }
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with the server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error viewing client details: " + e.getMessage(),
-                "Database Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error viewing client details: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -301,22 +327,26 @@ public class ClientsPanel extends JPanel {
      */
     public void addNewClient() {
         try {
-            // Open client editor dialog
+            // Open client editor dialog for a new client
             ClientEditorDialog dialog = new ClientEditorDialog(
-                SwingUtilities.getWindowAncestor(this), null);
+                SwingUtilities.getWindowAncestor(this), null); // Pass null for new client
             dialog.setVisible(true);
             
-            // Refresh the clients list if a client was added
             if (dialog.isClientSaved()) {
-                loadClients();
+                Client clientFromDialog = dialog.getClient();
+                if (clientFromDialog != null) {
+                    Client_SERVER serverClientToCreate = mapClientClientToServerClient(clientFromDialog);
+                    String result = clientController.createClient(serverClientToCreate); // createClient was registerClient in service
+                    SwingUtils.showInfoMessage(this, result, "Create Client Status");
+                    loadClients(); // Refresh list
+                }
             }
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with the server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error adding client: " + e.getMessage(),
-                "Database Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error adding client: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -330,31 +360,45 @@ public class ClientsPanel extends JPanel {
             return;
         }
         
-        // Get client ID from selected row
-        String clientId = clientsTable.getValueAt(selectedRow, 0).toString();
-        
+        // Get client business ID from selected row
+        String clientBusinessId = clientsTable.getValueAt(selectedRow, 0).toString();
+        Client clientToEdit = getClientFromDisplayedList(clientBusinessId);
+
+        if (clientToEdit == null) {
+            SwingUtils.showErrorMessage(this, "Could not retrieve client for editing: " + clientBusinessId, "Error");
+            return;
+        }
+
         try {
-            // Get the client
-            Client client = clientController.getClientByClientId(clientId);
+            // Fetch the full server object to ensure we have the latest data and the correct int ID
+            Client_SERVER serverClientCurrent = clientController.getClientById(clientToEdit.getId());
+            if (serverClientCurrent == null) {
+                 SwingUtils.showErrorMessage(this, "Client not found on server for editing.", "Error");
+                 return;
+            }
+            Client clientForDialog = mapServerClientToClientClient(serverClientCurrent);
+
+            ClientEditorDialog dialog = new ClientEditorDialog(
+                SwingUtilities.getWindowAncestor(this), clientForDialog);
+            dialog.setVisible(true);
             
-            if (client != null) {
-                // Open client editor dialog
-                ClientEditorDialog dialog = new ClientEditorDialog(
-                    SwingUtilities.getWindowAncestor(this), client);
-                dialog.setVisible(true);
-                
-                // Refresh the clients list if the client was updated
-                if (dialog.isClientSaved()) {
-                    loadClients();
+            if (dialog.isClientSaved()) {
+                Client editedClientFromDialog = dialog.getClient();
+                if (editedClientFromDialog != null) {
+                    Client_SERVER serverClientToUpdate = mapClientClientToServerClient(editedClientFromDialog);
+                    // Important: Ensure the ID from the original server object is used for update
+                    serverClientToUpdate.setId(serverClientCurrent.getId()); 
+                    String result = clientController.updateClient(serverClientToUpdate);
+                    SwingUtils.showInfoMessage(this, result, "Update Client Status");
+                    loadClients(); // Refresh list
                 }
             }
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with the server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error editing client: " + e.getMessage(),
-                "Database Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error editing client: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -382,32 +426,28 @@ public class ClientsPanel extends JPanel {
         
         if (confirmed) {
             try {
-                // Delete the client
-                boolean success = clientController.deleteClient(clientId);
-                
-                if (success) {
-                    SwingUtils.showInfoMessage(
-                        this,
-                        "Client deleted successfully.",
-                        "Success"
-                    );
-                    
-                    // Refresh the clients list
-                    loadClients();
-                } else {
-                    SwingUtils.showErrorMessage(
-                        this,
-                        "Failed to delete client. It may have cases or other related records.",
-                        "Deletion Error"
-                    );
+                Client clientToDelete = getClientFromDisplayedList(clientId); // Find by business ID
+                if (clientToDelete == null) {
+                     SwingUtils.showErrorMessage(this, "Client to delete not found in local list: " + clientId, "Error");
+                     return;
                 }
+
+                // ClientController.deleteClient expects a server.model.Client object.
+                // We need its primary key (id) to fetch the server object first.
+                Client_SERVER serverClientToDelete = clientController.getClientById(clientToDelete.getId());
                 
+                if (serverClientToDelete != null) {
+                    String result = clientController.deleteClient(serverClientToDelete);
+                    SwingUtils.showInfoMessage(this, result, "Delete Client Status");
+                    loadClients(); // Refresh list
+                } else {
+                     SwingUtils.showErrorMessage(this, "Client not found on server for deletion: " + clientId, "Error");
+                }
+            } catch (RemoteException re) {
+                SwingUtils.showErrorMessage(this, "Error communicating with the server: " + re.getMessage(), "Connection Error");
+                re.printStackTrace();
             } catch (Exception e) {
-                SwingUtils.showErrorMessage(
-                    this,
-                    "Error deleting client: " + e.getMessage(),
-                    "Database Error"
-                );
+                SwingUtils.showErrorMessage(this, "Error deleting client: " + e.getMessage(), "Application Error");
                 e.printStackTrace();
             }
         }
@@ -438,5 +478,52 @@ public class ClientsPanel extends JPanel {
         private void applyFilters() {
             loadClients();
         }
+    }
+    
+    // Helper to find a client from the currentlyDisplayClients list by its business ID (String)
+    private Client getClientFromDisplayedList(String clientBusinessId) {
+        if (currentlyDisplayedClients == null || clientBusinessId == null) {
+            return null;
+        }
+        for (Client client : currentlyDisplayedClients) {
+            if (clientBusinessId.equals(client.getClientId())) {
+                return client;
+            }
+        }
+        return null;
+    }
+
+    // Helper method to map server-side Client to client-side Client
+    private legalcasemanagementsystemclient.model.Client mapServerClientToClientClient(legalcasemanagementsystemserver.model.Client_SERVER serverClient) {
+        if (serverClient == null) return null;
+        legalcasemanagementsystemclient.model.Client clientClient = new legalcasemanagementsystemclient.model.Client();
+        clientClient.setId(serverClient.getId()); // int PK
+        clientClient.setClientId(serverClient.getClientId()); // String business key
+        clientClient.setName(serverClient.getName());
+        clientClient.setClientType(serverClient.getClientType());
+        clientClient.setContactPerson(serverClient.getContactPerson());
+        clientClient.setEmail(serverClient.getEmail());
+        clientClient.setPhone(serverClient.getPhone());
+        clientClient.setAddress(serverClient.getAddress());
+        clientClient.setRegistrationDate(serverClient.getRegistrationDate());
+        // Cases list is not mapped for now to avoid complexity
+        return clientClient;
+    }
+
+    // Helper method to map client-side Client to server-side Client
+    private legalcasemanagementsystemserver.model.Client_SERVER mapClientClientToServerClient(legalcasemanagementsystemclient.model.Client clientClient) {
+        if (clientClient == null) return null;
+        legalcasemanagementsystemserver.model.Client_SERVER serverClient = new legalcasemanagementsystemserver.model.Client_SERVER();
+        serverClient.setId(clientClient.getId()); // int PK
+        serverClient.setClientId(clientClient.getClientId()); // String business key
+        serverClient.setName(clientClient.getName());
+        serverClient.setClientType(clientClient.getClientType());
+        serverClient.setContactPerson(clientClient.getContactPerson());
+        serverClient.setEmail(clientClient.getEmail());
+        serverClient.setPhone(clientClient.getPhone());
+        serverClient.setAddress(clientClient.getAddress());
+        serverClient.setRegistrationDate(clientClient.getRegistrationDate());
+        // Cases list is not mapped
+        return serverClient;
     }
 }

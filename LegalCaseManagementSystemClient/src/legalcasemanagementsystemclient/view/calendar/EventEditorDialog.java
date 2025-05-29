@@ -152,8 +152,20 @@ public class EventEditorDialog extends JDialog {
         
         // Event type
         formPanel.add(createFieldLabel("Event Type:*"), labelConstraints);
-        eventTypeCombo = new JComboBox<>(eventController.getEventTypes());
+        eventTypeCombo = new JComboBox<>();
         eventTypeCombo.setFont(UIConstants.NORMAL_FONT);
+        try {
+            String[] types = eventController.getEventTypes();
+            for (String type : types) {
+                eventTypeCombo.addItem(type);
+            }
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading event types: " + re.getMessage(), "Connection Error");
+            eventTypeCombo.addItem("Meeting"); // Fallback
+        } catch (Exception e) {
+            System.err.println("EventEditorDialog: Error loading event types: " + e.getMessage());
+            SwingUtils.showErrorMessage(this, "An unexpected error occurred loading event types.", "Error");
+        }
         formPanel.add(eventTypeCombo, fieldConstraints);
         
         // Event date
@@ -190,8 +202,20 @@ public class EventEditorDialog extends JDialog {
         
         // Status
         formPanel.add(createFieldLabel("Status:"), labelConstraints);
-        statusCombo = new JComboBox<>(eventController.getEventStatuses());
+        statusCombo = new JComboBox<>();
         statusCombo.setFont(UIConstants.NORMAL_FONT);
+        try {
+            String[] statuses = eventController.getEventStatuses();
+            for (String status : statuses) {
+                statusCombo.addItem(status);
+            }
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading event statuses: " + re.getMessage(), "Connection Error");
+            statusCombo.addItem("Scheduled"); // Fallback
+        } catch (Exception e) {
+            System.err.println("EventEditorDialog: Error loading event statuses: " + e.getMessage());
+            SwingUtils.showErrorMessage(this, "An unexpected error occurred loading event statuses.", "Error");
+        }
         formPanel.add(statusCombo, fieldConstraints);
         
         // Case
@@ -351,29 +375,20 @@ public class EventEditorDialog extends JDialog {
      */
     private void loadCases() {
         try {
-            // Get all cases
+            // CaseController.getAllCases() now returns List<client.model.Case> DTOs
             List<Case> cases = caseController.getAllCases();
+            caseCombo.removeAllItems(); // Clear existing items
             
-            // Create arrays for the combo box
-            String[] caseNames = new String[cases.size()];
-            caseIds = new int[cases.size()];
-            
-            // Fill arrays
-            for (int i = 0; i < cases.size(); i++) {
-                Case c = cases.get(i);
-                caseNames[i] = c.getCaseNumber() + " - " + c.getTitle();
-                caseIds[i] = c.getId();
+            if (cases != null) {
+                for (Case legalCase : cases) { // legalCase is already a client.model.Case DTO
+                    caseCombo.addItem(new CaseItem(legalCase));
+                }
             }
-            
-            // Set model for the combo box
-            caseCombo.setModel(new DefaultComboBoxModel<>(caseNames));
-            
-        } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error loading cases: " + e.getMessage(),
-                "Database Error"
-            );
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading cases: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
+        } catch (Exception e) { // Catch other potential errors
+            SwingUtils.showErrorMessage(this, "An unexpected error occurred while loading cases: " + e.getMessage(), "Error");
             e.printStackTrace();
         }
     }
@@ -384,8 +399,10 @@ public class EventEditorDialog extends JDialog {
      * @param caseId The case ID to select
      */
     private void selectCase(int caseId) {
-        for (int i = 0; i < caseIds.length; i++) {
-            if (caseIds[i] == caseId) {
+        if (caseId <= 0) return;
+        for (int i = 0; i < caseCombo.getItemCount(); i++) {
+            CaseItem item = (CaseItem) caseCombo.getItemAt(i);
+            if (item.getCase() != null && item.getCase().getId() == caseId) {
                 caseCombo.setSelectedIndex(i);
                 return;
             }
@@ -545,9 +562,20 @@ public class EventEditorDialog extends JDialog {
             event.setStatus((String) statusCombo.getSelectedItem());
             
             // Get the selected case ID
-            int selectedIndex = caseCombo.getSelectedIndex();
-            if (selectedIndex >= 0 && selectedIndex < caseIds.length) {
-                event.setCaseId(caseIds[selectedIndex]);
+            Object selectedItem = caseCombo.getSelectedItem();
+            if (selectedItem instanceof CaseItem) {
+                CaseItem selectedCaseItem = (CaseItem) selectedItem;
+                if (selectedCaseItem.getCase() != null) {
+                    event.setCaseId(selectedCaseItem.getCase().getId());
+                } else {
+                     // Handle "No Case" or similar if that's an option
+                    event.setCaseId(0); // Or handle as error if case is mandatory
+                }
+            } else if (caseCombo.getItemCount() > 0) { 
+                // Fallback or error if not CaseItem (should not happen with current setup)
+                 showError("Invalid case selection."); return;
+            } else {
+                 showError("No cases available to associate. Please add a case first."); return;
             }
             
             // Set reminder settings
@@ -555,30 +583,27 @@ public class EventEditorDialog extends JDialog {
             event.setReminderDays((Integer) reminderDaysSpinner.getValue());
             
             // Save to database
-            boolean success;
-            if (event.getId() == 0) {
-                success = eventController.createEvent(event);
-            } else {
-                success = eventController.updateEvent(event);
+            String resultMessage;
+            // eventController.scheduleEvent and updateEvent expect client.model.Event DTO
+            if (event.getId() == 0) { // New event
+                resultMessage = eventController.scheduleEvent(event);
+            } else { // Existing event
+                resultMessage = eventController.updateEvent(event);
             }
             
-            if (success) {
+            if (resultMessage != null && resultMessage.toLowerCase().contains("success")) {
                 eventSaved = true;
+                SwingUtils.showInfoMessage(this, resultMessage, "Save Successful");
                 dispose();
             } else {
-                SwingUtils.showErrorMessage(
-                    this,
-                    "Failed to save event. Please try again.",
-                    "Database Error"
-                );
+                SwingUtils.showErrorMessage(this, resultMessage != null ? resultMessage : "Failed to save event.", "Save Error");
             }
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error saving event: " + e.getMessage(),
-                "Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error saving event: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }

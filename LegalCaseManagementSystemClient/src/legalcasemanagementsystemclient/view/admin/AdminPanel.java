@@ -105,9 +105,23 @@ public class AdminPanel extends JPanel {
         JLabel roleFilterLabel = new JLabel("Filter by Role:");
         roleFilterLabel.setFont(UIConstants.NORMAL_FONT);
         
-        String[] roles = {"All Roles", "Admin", "Attorney", "Staff", "Finance", "ReadOnly"};
-        roleFilterCombo = new JComboBox<>(roles);
+        // Populate roles from controller
+        roleFilterCombo = new JComboBox<>();
         roleFilterCombo.setFont(UIConstants.NORMAL_FONT);
+        try {
+            String[] roles = userController.getUserRoles(); // Returns String[]
+            roleFilterCombo.addItem("All Roles");
+            for (String role : roles) {
+                roleFilterCombo.addItem(role);
+            }
+        } catch (RemoteException e) {
+            SwingUtils.showErrorMessage(this, "Error loading roles: " + e.getMessage(), "Connection Error");
+            roleFilterCombo.addItem("All Roles"); // Default
+            // Add known roles as fallback if needed, or disable filter
+            roleFilterCombo.addItem("Admin");
+            roleFilterCombo.addItem("Attorney");
+            // ... etc.
+        }
         roleFilterCombo.addActionListener(e -> filterUsersByRole());
         
         JButton refreshButton = new JButton("Refresh");
@@ -443,16 +457,17 @@ public class AdminPanel extends JPanel {
             // Get filter selection
             String selectedRole = (String) roleFilterCombo.getSelectedItem();
             
-            // Get users from controller
+            // Get users from controller (UserController now returns List<client.model.User> DTOs)
             List<User> users;
             if ("All Roles".equals(selectedRole)) {
-                users = userController.getAllActiveUsers();
+                users = userController.getAllUsers(); // Fetches all users (active and inactive)
             } else {
                 users = userController.getUsersByRole(selectedRole);
             }
             
-            // Populate table
-            for (User user : users) {
+            // Populate table with DTOs
+            if (users != null) {
+                for (User user : users) {
                 Object[] row = {
                     user.getUsername(),
                     user.getFullName(),
@@ -467,12 +482,11 @@ public class AdminPanel extends JPanel {
             // Update button states
             updateButtonStates();
             
-        } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error loading users: " + e.getMessage(),
-                "Database Error"
-            );
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading users: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
+        } catch (Exception e) { // Catch other unexpected errors
+            SwingUtils.showErrorMessage(this, "An unexpected error occurred while loading users: " + e.getMessage(), "Error");
             e.printStackTrace();
         }
     }
@@ -561,28 +575,21 @@ public class AdminPanel extends JPanel {
             try {
                 User user = userController.getUserByUsername(username);
                 if (user != null) {
-                    boolean success = userController.deactivateUser(user.getId());
+                    boolean success = userController.deactivateUser(user.getId()); // Returns boolean
                     if (success) {
-                        SwingUtils.showInfoMessage(
-                            this,
-                            "User deactivated successfully.",
-                            "Success"
-                        );
+                        SwingUtils.showInfoMessage(this, "User deactivated successfully.", "Success");
                         loadUsers();
                     } else {
-                        SwingUtils.showErrorMessage(
-                            this,
-                            "Failed to deactivate user.",
-                            "Error"
-                        );
+                        SwingUtils.showErrorMessage(this, "Failed to deactivate user.", "Error");
                     }
+                } else {
+                    SwingUtils.showErrorMessage(this, "User " + username + " not found.", "Error");
                 }
+            } catch (RemoteException re) {
+                SwingUtils.showErrorMessage(this, "Error deactivating user (connection): " + re.getMessage(), "Connection Error");
+                re.printStackTrace();
             } catch (Exception e) {
-                SwingUtils.showErrorMessage(
-                    this,
-                    "Error deactivating user: " + e.getMessage(),
-                    "Database Error"
-                );
+                SwingUtils.showErrorMessage(this, "Error deactivating user: " + e.getMessage(), "Application Error");
                 e.printStackTrace();
             }
         }
@@ -609,28 +616,18 @@ public class AdminPanel extends JPanel {
         
         if (confirmed) {
             try {
-                String newPassword = userController.resetPassword(email);
-                if (newPassword != null) {
-                    SwingUtils.showInfoMessage(
-                        this,
-                        "Password reset successfully.\n\n" +
-                        "New password: " + newPassword + "\n\n" +
-                        "Please inform the user about their new password.",
-                        "Password Reset"
-                    );
+                String resultMessage = userController.resetPassword(email); // Returns String message
+                if (resultMessage != null && resultMessage.toLowerCase().contains("success")) {
+                    // The message from server might include the new password.
+                    SwingUtils.showInfoMessage(this, resultMessage, "Password Reset");
                 } else {
-                    SwingUtils.showErrorMessage(
-                        this,
-                        "Failed to reset password.",
-                        "Error"
-                    );
+                    SwingUtils.showErrorMessage(this, resultMessage != null ? resultMessage : "Failed to reset password.", "Error");
                 }
+            } catch (RemoteException re) {
+                SwingUtils.showErrorMessage(this, "Error resetting password (connection): " + re.getMessage(), "Connection Error");
+                re.printStackTrace();
             } catch (Exception e) {
-                SwingUtils.showErrorMessage(
-                    this,
-                    "Error resetting password: " + e.getMessage(),
-                    "Database Error"
-                );
+                SwingUtils.showErrorMessage(this, "Error resetting password: " + e.getMessage(), "Application Error");
                 e.printStackTrace();
             }
         }
@@ -661,34 +658,34 @@ public class AdminPanel extends JPanel {
             try {
                 User user = userController.getUserByUsername(username);
                 if (user != null) {
-                    boolean success;
+                    boolean success; // deactivateUser and reactivateUser return boolean
+                    String successMessage;
+                    String failureMessage;
+
                     if (isActive) {
                         success = userController.deactivateUser(user.getId());
+                        successMessage = "User deactivated successfully.";
+                        failureMessage = "Failed to deactivate user.";
                     } else {
                         success = userController.reactivateUser(user.getId());
+                        successMessage = "User reactivated successfully.";
+                        failureMessage = "Failed to reactivate user.";
                     }
                     
                     if (success) {
-                        SwingUtils.showInfoMessage(
-                            this,
-                            "User " + action + "d successfully.",
-                            "Success"
-                        );
+                        SwingUtils.showInfoMessage(this, successMessage, "Success");
                         loadUsers();
                     } else {
-                        SwingUtils.showErrorMessage(
-                            this,
-                            "Failed to " + action + " user.",
-                            "Error"
-                        );
+                        SwingUtils.showErrorMessage(this, failureMessage, "Error");
                     }
+                } else {
+                    SwingUtils.showErrorMessage(this, "User " + username + " not found.", "Error");
                 }
+            } catch (RemoteException re) {
+                SwingUtils.showErrorMessage(this, "Error changing user status (connection): " + re.getMessage(), "Connection Error");
+                re.printStackTrace();
             } catch (Exception e) {
-                SwingUtils.showErrorMessage(
-                    this,
-                    "Error changing user status: " + e.getMessage(),
-                    "Database Error"
-                );
+                SwingUtils.showErrorMessage(this, "Error changing user status: " + e.getMessage(), "Application Error");
                 e.printStackTrace();
             }
         }

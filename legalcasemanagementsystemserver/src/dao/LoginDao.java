@@ -38,9 +38,19 @@ public class LoginDao {
         
     }
     public String createUser(User user, String role) {
-    // set role before saving if needed
-    user.setRole(role);
-    return createUser(user, role); // assuming this exists
-}
-
+        user.setRole(role); // Set role as intended
+        Transaction transaction = null;
+        try (Session session = HibernateUtil.getSessionFactory().openSession()) {
+            transaction = session.beginTransaction();
+            session.save(user); // Save the user entity
+            transaction.commit();
+            return "User created successfully";
+        } catch (Exception e) {
+            if (transaction != null && transaction.isActive()) {
+                transaction.rollback();
+            }
+            e.printStackTrace();
+            return "Error creating user: " + e.getMessage();
+        }
+    }
 }

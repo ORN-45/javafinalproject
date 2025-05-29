@@ -56,7 +56,7 @@ public class InvoiceDao {
 }
          public List<Invoice> retrieveAll(){
              Session ss= HibernateUtil.getSessionFactory().openSession();
-             List<Invoice> invoiceList= ss.createQuery("select  ord from invoice ord").list();
+             List<Invoice> invoiceList= ss.createQuery("select  ord from Invoice ord").list(); // Corrected HQL
              ss.close();
              return invoiceList;
           }
@@ -66,4 +66,40 @@ public class InvoiceDao {
         ss.close();
         return invoices;
     }  
+
+    public List<model.Invoice> getInvoicesByCaseId(int caseId) {
+        Session session = null;
+        try {
+            session = HibernateUtil.getSessionFactory().openSession();
+            String hql = "FROM Invoice i WHERE i.legalCase.id = :caseId";
+            org.hibernate.query.Query<model.Invoice> query = session.createQuery(hql, model.Invoice.class);
+            query.setParameter("caseId", caseId);
+            return query.list();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        } finally {
+            if (session != null) {
+                session.close();
+            }
+        }
+    }
+
+    public List<model.Invoice> getInvoicesByClientId(int clientId) {
+        Session session = null;
+        try {
+            session = HibernateUtil.getSessionFactory().openSession();
+            String hql = "FROM Invoice i WHERE i.client.id = :clientId";
+            org.hibernate.query.Query<model.Invoice> query = session.createQuery(hql, model.Invoice.class);
+            query.setParameter("clientId", clientId);
+            return query.list();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        } finally {
+            if (session != null) {
+                session.close();
+            }
+        }
+    }
 }

@@ -6,12 +6,16 @@ import java.awt.*;
 import java.awt.event.*;
 import javax.swing.event.*;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
+import java.rmi.RemoteException;
 
-import model.Attorney;
+// Client-side DTO (model.Attorney is now the DTO)
+import model.Attorney; 
 import controller.AttorneyController;
 import view.components.CustomTable;
 import view.components.TableFilterPanel;
-import view.components.StatusIndicator;
+// import view.components.StatusIndicator; // Not used in this table
 import view.util.UIConstants;
 import view.util.SwingUtils;
 
@@ -22,6 +26,7 @@ public class AttorneysPanel extends JPanel {
     private AttorneyController attorneyController;
     private CustomTable attorneysTable;
     private AttorneyFilterPanel filterPanel;
+    private List<Attorney> displayedAttorneys; // To store DTOs for local filtering & access
     
     private JButton addButton;
     private JButton editButton;
@@ -192,29 +197,36 @@ public class AttorneysPanel extends JPanel {
             attorneysTable.clearTable();
             attorneysTable.clearFilters();
             
-            // Get attorneys from controller
-            List<Attorney> attorneys;
+            // Get attorney DTOs from controller
+            this.displayedAttorneys = attorneyController.getAllAttorneys(); // Returns List<client.model.Attorney>
+            
+            List<Attorney> attorneysToDisplay = new ArrayList<>(this.displayedAttorneys);
             
             String filterType = filterPanel.getSelectedFilterType();
             String searchText = filterPanel.getSearchText();
             
             if (searchText != null && !searchText.isEmpty()) {
+                String lowerSearchText = searchText.toLowerCase();
                 if ("Name".equals(filterType)) {
-                    attorneys = attorneyController.findAttorneysByName(searchText);
+                    attorneysToDisplay = this.displayedAttorneys.stream()
+                        .filter(a -> a.getFullName() != null && a.getFullName().toLowerCase().contains(lowerSearchText))
+                        .collect(Collectors.toList());
                 } else if ("Specialization".equals(filterType)) {
-                    attorneys = attorneyController.findAttorneysBySpecialization(searchText);
-                } else {
-                    // Apply filter to the view instead of database for "All"
-                    attorneys = attorneyController.getAllAttorneys();
-                    attorneysTable.addFilter(1, searchText); // Name column
-                    attorneysTable.addFilter(2, searchText); // Specialization column
+                     attorneysToDisplay = this.displayedAttorneys.stream()
+                        .filter(a -> a.getSpecialization() != null && a.getSpecialization().toLowerCase().contains(lowerSearchText))
+                        .collect(Collectors.toList());
+                } else { // "All" - filter locally across multiple relevant fields
+                    attorneysToDisplay = this.displayedAttorneys.stream()
+                        .filter(a -> (a.getFullName() != null && a.getFullName().toLowerCase().contains(lowerSearchText)) ||
+                                     (a.getAttorneyId() != null && a.getAttorneyId().toLowerCase().contains(lowerSearchText)) ||
+                                     (a.getEmail() != null && a.getEmail().toLowerCase().contains(lowerSearchText)) ||
+                                     (a.getSpecialization() != null && a.getSpecialization().toLowerCase().contains(lowerSearchText)))
+                        .collect(Collectors.toList());
                 }
-            } else {
-                attorneys = attorneyController.getAllAttorneys();
             }
             
             // Populate table
-            for (Attorney attorney : attorneys) {
+            for (Attorney attorney : attorneysToDisplay) {
                 Object[] row = {
                     attorney.getAttorneyId(),
                     attorney.getFullName(),
@@ -228,7 +240,7 @@ public class AttorneysPanel extends JPanel {
             }
             
             // Display a message if no attorneys found
-            if (attorneys.isEmpty() && (searchText == null || searchText.isEmpty())) {
+            if (attorneysToDisplay.isEmpty() && (searchText == null || searchText.isEmpty())) {
                 SwingUtils.showInfoMessage(
                     this,
                     "No attorneys found. Add a new attorney to get started.",
@@ -239,12 +251,11 @@ public class AttorneysPanel extends JPanel {
             // Update button states
             updateButtonStates();
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error loading attorneys: " + e.getMessage(),
-                "Database Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error loading attorneys: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -268,29 +279,35 @@ public class AttorneysPanel extends JPanel {
             return;
         }
         
-        // Get attorney ID from selected row
-        String attorneyId = attorneysTable.getValueAt(selectedRow, 0).toString();
+        // Get attorney business ID (String) from selected row
+        String attorneyBusinessId = attorneysTable.getValueAt(selectedRow, 0).toString();
+        Attorney selectedAttorneyDto = getAttorneyFromDisplayedList(attorneyBusinessId);
+
+        if (selectedAttorneyDto == null) {
+            SwingUtils.showErrorMessage(this, "Could not retrieve details for attorney ID: " + attorneyBusinessId, "Error");
+            return;
+        }
         
         try {
-            // Get the attorney
-            Attorney attorney = attorneyController.getAttorneyByAttorneyId(attorneyId);
+            // Fetch the latest DTO using its primary key (id) for the dialog
+            Attorney attorneyForDialog = attorneyController.getAttorneyById(selectedAttorneyDto.getId()); 
             
-            if (attorney != null) {
-                // Open attorney details dialog
+            if (attorneyForDialog != null) {
                 AttorneyDetailsDialog dialog = new AttorneyDetailsDialog(
-                    SwingUtilities.getWindowAncestor(this), attorney);
+                    SwingUtilities.getWindowAncestor(this), attorneyForDialog); // Pass DTO
                 dialog.setVisible(true);
                 
-                // Refresh the attorneys list after the dialog is closed
-                loadAttorneys();
+                // No explicit refresh needed here unless details dialog can modify data that affects this list
+                // loadAttorneys(); 
+            } else {
+                 SwingUtils.showErrorMessage(this, "Attorney details not found on server.", "Error");
             }
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error viewing attorney details: " + e.getMessage(),
-                "Database Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error viewing attorney details: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -301,22 +318,25 @@ public class AttorneysPanel extends JPanel {
      */
     public void addNewAttorney() {
         try {
-            // Open attorney editor dialog
+            // Open attorney editor dialog for a new attorney DTO
             AttorneyEditorDialog dialog = new AttorneyEditorDialog(
-                SwingUtilities.getWindowAncestor(this), null);
+                SwingUtilities.getWindowAncestor(this), null); // Pass null for new attorney
             dialog.setVisible(true);
             
-            // Refresh the attorneys list if an attorney was added
             if (dialog.isAttorneySaved()) {
-                loadAttorneys();
+                Attorney attorneyDtoFromDialog = dialog.getAttorney(); // This is a client.model.Attorney DTO
+                if (attorneyDtoFromDialog != null) {
+                    String result = attorneyController.createAttorney(attorneyDtoFromDialog);
+                    SwingUtils.showInfoMessage(this, result, "Create Attorney Status");
+                    loadAttorneys(); // Refresh list
+                }
             }
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error adding attorney: " + e.getMessage(),
-                "Database Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error adding attorney: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -330,31 +350,42 @@ public class AttorneysPanel extends JPanel {
             return;
         }
         
-        // Get attorney ID from selected row
-        String attorneyId = attorneysTable.getValueAt(selectedRow, 0).toString();
-        
+        // Get attorney business ID from selected row
+        String attorneyBusinessId = attorneysTable.getValueAt(selectedRow, 0).toString();
+        Attorney attorneyToEdit = getAttorneyFromDisplayedList(attorneyBusinessId);
+
+        if (attorneyToEdit == null) {
+            SwingUtils.showErrorMessage(this, "Could not retrieve attorney for editing: " + attorneyBusinessId, "Error");
+            return;
+        }
+
         try {
-            // Get the attorney
-            Attorney attorney = attorneyController.getAttorneyByAttorneyId(attorneyId);
+            // Fetch the latest DTO to pass to the editor
+            Attorney currentAttorneyDto = attorneyController.getAttorneyById(attorneyToEdit.getId());
+            if (currentAttorneyDto == null) {
+                 SwingUtils.showErrorMessage(this, "Attorney not found on server for editing.", "Error");
+                 return;
+            }
+
+            AttorneyEditorDialog dialog = new AttorneyEditorDialog(
+                SwingUtilities.getWindowAncestor(this), currentAttorneyDto); // Pass DTO
+            dialog.setVisible(true);
             
-            if (attorney != null) {
-                // Open attorney editor dialog
-                AttorneyEditorDialog dialog = new AttorneyEditorDialog(
-                    SwingUtilities.getWindowAncestor(this), attorney);
-                dialog.setVisible(true);
-                
-                // Refresh the attorneys list if the attorney was updated
-                if (dialog.isAttorneySaved()) {
-                    loadAttorneys();
+            if (dialog.isAttorneySaved()) {
+                Attorney editedAttorneyDto = dialog.getAttorney(); // This is a client.model.Attorney DTO
+                if (editedAttorneyDto != null) {
+                    // The ID should already be set correctly from the dialog if it was an edit
+                    String result = attorneyController.updateAttorney(editedAttorneyDto);
+                    SwingUtils.showInfoMessage(this, result, "Update Attorney Status");
+                    loadAttorneys(); // Refresh list
                 }
             }
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error editing attorney: " + e.getMessage(),
-                "Database Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error editing attorney: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -382,32 +413,22 @@ public class AttorneysPanel extends JPanel {
         
         if (confirmed) {
             try {
-                // Delete the attorney
-                boolean success = attorneyController.deleteAttorney(attorneyId);
-                
-                if (success) {
-                    SwingUtils.showInfoMessage(
-                        this,
-                        "Attorney deleted successfully.",
-                        "Success"
-                    );
-                    
-                    // Refresh the attorneys list
-                    loadAttorneys();
-                } else {
-                    SwingUtils.showErrorMessage(
-                        this,
-                        "Failed to delete attorney. They may have cases or other related records.",
-                        "Deletion Error"
-                    );
+                Attorney attorneyDtoToDelete = getAttorneyFromDisplayedList(attorneyId); // Find by business ID
+                if (attorneyDtoToDelete == null) {
+                     SwingUtils.showErrorMessage(this, "Attorney to delete not found in local list: " + attorneyId, "Error");
+                     return;
                 }
                 
+                // AttorneyController.deleteAttorney expects a client.model.Attorney DTO
+                String result = attorneyController.deleteAttorney(attorneyDtoToDelete);
+                SwingUtils.showInfoMessage(this, result, "Delete Attorney Status");
+                loadAttorneys(); // Refresh list
+                
+            } catch (RemoteException re) {
+                SwingUtils.showErrorMessage(this, "Error communicating with server: " + re.getMessage(), "Connection Error");
+                re.printStackTrace();
             } catch (Exception e) {
-                SwingUtils.showErrorMessage(
-                    this,
-                    "Error deleting attorney: " + e.getMessage(),
-                    "Database Error"
-                );
+                SwingUtils.showErrorMessage(this, "Error deleting attorney: " + e.getMessage(), "Application Error");
                 e.printStackTrace();
             }
         }
@@ -438,5 +459,18 @@ public class AttorneysPanel extends JPanel {
         private void applyFilters() {
             loadAttorneys();
         }
+    }
+
+    // Helper to find an Attorney DTO from the displayed list by its business ID (String)
+    private Attorney getAttorneyFromDisplayedList(String attorneyBusinessId) {
+        if (displayedAttorneys == null || attorneyBusinessId == null) {
+            return null;
+        }
+        for (Attorney attorney : displayedAttorneys) {
+            if (attorneyBusinessId.equals(attorney.getAttorneyId())) {
+                return attorney;
+            }
+        }
+        return null;
     }
 }

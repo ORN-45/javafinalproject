@@ -38,6 +38,9 @@ public class User implements Serializable
     @Column(nullable = false)
     private boolean active;
 
+    @Column(nullable = false, length = 255) // Assuming a reasonable length for a password hash eventually
+    private String password;
+
     // Relationship: One User can have many TimeEntries
     @OneToMany(mappedBy = "attorney", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
     private Set<TimeEntry> timeEntries;
@@ -75,13 +78,14 @@ public class User implements Serializable
     /**
      * Full constructor
      */
-    public User(int id, String username, String email, String fullName, String role,
+    public User(int id, String username, String email, String fullName, String role, String password,
                 LocalDate registrationDate, LocalDateTime lastLogin, boolean active) {
         this.id = id;
         this.username = username;
         this.email = email;
         this.fullName = fullName;
         this.role = role;
+        this.password = password; // Initialize password
         this.registrationDate = registrationDate;
         this.lastLogin = lastLogin;
         this.active = active;
@@ -151,6 +155,14 @@ public class User implements Serializable
 
     public void setActive(boolean active) {
         this.active = active;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
     }
 
     public Set<TimeEntry> getTimeEntries() {

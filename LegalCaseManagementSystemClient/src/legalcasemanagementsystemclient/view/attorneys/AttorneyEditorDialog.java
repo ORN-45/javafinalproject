@@ -344,22 +344,27 @@ public class AttorneyEditorDialog extends JDialog {
             double hourlyRate = rateValue != null ? rateValue.doubleValue() : 0.0;
             attorney.setHourlyRate(hourlyRate);
             
-            boolean success;
-            if (attorney.getId() == 0) {
+            String resultMessage;
+            if (attorney.getId() == 0) { // Assuming ID 0 means new attorney
                 // Create new attorney
-                success = attorneyController.createAttorney(attorney);
+                resultMessage = attorneyController.createAttorney(attorney);
             } else {
                 // Update existing attorney
-                success = attorneyController.updateAttorney(attorney);
+                resultMessage = attorneyController.updateAttorney(attorney);
             }
             
-            if (success) {
+            // Check if the operation was successful based on the message from the server
+            if (resultMessage != null && resultMessage.toLowerCase().contains("success")) {
                 attorneySaved = true;
+                SwingUtils.showInfoMessage(this, resultMessage, "Save Successful");
                 dispose();
             } else {
-                showError("Failed to save attorney. Please try again.");
+                showError(resultMessage != null ? resultMessage : "Failed to save attorney. Please try again.");
             }
             
+        } catch (java.rmi.RemoteException re) {
+            showError("Error communicating with server: " + re.getMessage());
+            re.printStackTrace();
         } catch (Exception e) {
             showError("Error saving attorney: " + e.getMessage());
             e.printStackTrace();

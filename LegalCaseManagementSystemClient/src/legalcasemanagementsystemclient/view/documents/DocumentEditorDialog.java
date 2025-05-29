@@ -123,8 +123,21 @@ public class DocumentEditorDialog extends JDialog {
         documentTypeLabel.setFont(UIConstants.LABEL_FONT);
         formPanel.add(documentTypeLabel, labelConstraints);
         
-        documentTypeCombo = new JComboBox<>(documentController.getDocumentTypes());
+        documentTypeCombo = new JComboBox<>();
         documentTypeCombo.setFont(UIConstants.NORMAL_FONT);
+        try {
+            String[] types = documentController.getDocumentTypes();
+            for (String type : types) {
+                documentTypeCombo.addItem(type);
+            }
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading document types: " + re.getMessage(), "Connection Error");
+            // Add some default/fallback types or disable
+            documentTypeCombo.addItem("General"); 
+        } catch (Exception e) {
+            System.err.println("DocumentEditorDialog: Error loading document types: " + e.getMessage());
+            SwingUtils.showErrorMessage(this, "An unexpected error occurred while loading document types.", "Error");
+        }
         formPanel.add(documentTypeCombo, fieldConstraints);
         
         // Associated Case
@@ -249,20 +262,21 @@ public class DocumentEditorDialog extends JDialog {
      */
     private void loadCases() {
         try {
-            List<Case> cases = caseController.getAllCases();
-            caseCombo.removeAllItems();
+            // CaseController.getAllCases() now returns List<client.model.Case> DTOs
+            List<Case> cases = caseController.getAllCases(); 
+            caseCombo.removeAllItems(); 
             
-            for (Case legalCase : cases) {
-                caseCombo.addItem(new CaseItem(legalCase));
+            if (cases != null) {
+                for (Case legalCase : cases) { // legalCase is already a client.model.Case DTO
+                    caseCombo.addItem(new CaseItem(legalCase));
+                }
             }
-        } catch (Exception e) {
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading cases: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
+        } catch (Exception e) { // Catch other potential errors
+            SwingUtils.showErrorMessage(this, "An unexpected error occurred while loading cases: " + e.getMessage(), "Error");
             e.printStackTrace();
-            JOptionPane.showMessageDialog(
-                this,
-                "Error loading cases: " + e.getMessage(),
-                "Database Error",
-                JOptionPane.ERROR_MESSAGE
-            );
         }
     }
     
@@ -284,19 +298,11 @@ public class DocumentEditorDialog extends JDialog {
             }
             
             // Set case
-            if (document.getCase() == null && document.getCaseId() > 0) {
-                try {
-                    Case legalCase = caseController.getCaseById(document.getCaseId());
-                    document.setCase(legalCase);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-            
-            if (document.getCase() != null) {
+            // document.getCaseId() is from the DTO. We need to find the CaseItem with this ID.
+            if (document.getCaseId() > 0) {
                 for (int i = 0; i < caseCombo.getItemCount(); i++) {
                     CaseItem item = caseCombo.getItemAt(i);
-                    if (item.getCase().getId() == document.getCase().getId()) {
+                    if (item.getCase().getId() == document.getCaseId()) {
                         caseCombo.setSelectedIndex(i);
                         break;
                     }
@@ -310,7 +316,8 @@ public class DocumentEditorDialog extends JDialog {
             }
             
             dateAddedChooser.setDate(document.getDateAdded());
-            filePathLabel.setText(document.getFilePath());
+            // Use fileName from DTO for the label
+            filePathLabel.setText(document.getFileName() != null ? document.getFileName() : (uploadFile != null ? uploadFile.getName() : "No file selected"));
             
             // Set status
             for (int i = 0; i < statusCombo.getItemCount(); i++) {
@@ -409,30 +416,64 @@ public class DocumentEditorDialog extends JDialog {
             document.setStatus((String) statusCombo.getSelectedItem());
             
             // Set case ID
-            CaseItem selectedCase = (CaseItem) caseCombo.getSelectedItem();
-            document.setCaseId(selectedCase.getCase().getId());
+            CaseItem selectedCaseItem = (CaseItem) caseCombo.getSelectedItem();
+            document.setCaseId(selectedCaseItem.getCase().getId()); // CaseItem holds client.model.Case DTO
             
-            // Set created by (would typically be the current user's ID)
-            if (document.getCreatedBy() == 0) {
+            // Set created by (would typically be the current user's ID - placeholder)
+            if (document.getCreatedBy() == 0 && (document.getId() == 0 || this.document == null)) { // Only for new docs if not set
                 document.setCreatedBy(1); // Default to user ID 1 for now
             }
-            
-            boolean success;
-            if (document.getId() == 0) {
-                // Create new document and upload file
-                success = documentController.createDocument(document, uploadFile);
+
+            // Handle file content for new uploads
+            if ((document.getId() == 0 || this.document == null) && uploadFile != null) { // isNewDocument essentially
+                document.setFileName(uploadFile.getName());
+                try {
+                    document.setFileContent(java.nio.file.Files.readAllBytes(uploadFile.toPath()));
+                    // Try to determine file type (MIME type)
+                    String detectedFileType = java.nio.file.Files.probeContentType(uploadFile.toPath());
+                    document.setFileType(detectedFileType != null ? detectedFileType : "application/octet-stream");
+                } catch (java.io.IOException ioe) {
+                    showError("Error reading file content: " + ioe.getMessage());
+                    ioe.printStackTrace();
+                    return; // Stop save process if file read fails
+                }
+            } else if (document.getId() != 0 && uploadFile != null) {
+                // Logic for handling file replacement during edit (if allowed by UI)
+                // For now, this part is simplified: if uploadFile is not null, it's a new file or replacement.
+                 document.setFileName(uploadFile.getName());
+                try {
+                    document.setFileContent(java.nio.file.Files.readAllBytes(uploadFile.toPath()));
+                    String detectedFileType = java.nio.file.Files.probeContentType(uploadFile.toPath());
+                    document.setFileType(detectedFileType != null ? detectedFileType : "application/octet-stream");
+                } catch (java.io.IOException ioe) {
+                    showError("Error reading file content for update: " + ioe.getMessage());
+                    ioe.printStackTrace();
+                    return; 
+                }
+            }
+            // If editing and no new uploadFile is provided, existing fileContent on DTO (if any) will be sent.
+            // DocumentController's DTO mapping to server model will pass along fileContent if present on DTO.
+
+            String resultMessage;
+            if (document.getId() == 0 || this.document == null) { // isNewDocument
+                resultMessage = documentController.saveDocument(document);
             } else {
-                // Update existing document
-                success = documentController.updateDocument(document);
+                // Ensure ID is set on the DTO if it came from this.document
+                document.setId(this.document.getId()); 
+                resultMessage = documentController.updateDocument(document);
             }
             
-            if (success) {
+            if (resultMessage != null && resultMessage.toLowerCase().contains("success")) {
                 documentSaved = true;
+                SwingUtils.showInfoMessage(this, resultMessage, "Save Successful");
                 dispose();
             } else {
-                showError("Failed to save document. Please try again.");
+                showError(resultMessage != null ? resultMessage : "Failed to save document. Please try again.");
             }
             
+        } catch (RemoteException re) {
+            showError("Error communicating with server: " + re.getMessage());
+            re.printStackTrace();
         } catch (Exception e) {
             showError("Error saving document: " + e.getMessage());
             e.printStackTrace();

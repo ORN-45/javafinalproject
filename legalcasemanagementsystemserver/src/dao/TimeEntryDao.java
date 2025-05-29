@@ -56,7 +56,7 @@ public class TimeEntryDao {
 }
          public List<TimeEntry> retrieveAll(){
              Session ss= HibernateUtil.getSessionFactory().openSession();
-             List<TimeEntry> timeentryList= ss.createQuery("select  ord from timeentry ord").list();
+             List<TimeEntry> timeentryList= ss.createQuery("select  ord from TimeEntry ord").list(); // Corrected HQL
              ss.close();
              return timeentryList;
           }
@@ -66,4 +66,40 @@ public class TimeEntryDao {
         ss.close();
         return timeentrys;
     }  
+
+    public List<model.TimeEntry> getTimeEntriesByCaseId(int caseId) {
+        Session session = null;
+        try {
+            session = HibernateUtil.getSessionFactory().openSession();
+            String hql = "FROM TimeEntry te WHERE te.associatedCase.id = :caseId";
+            org.hibernate.query.Query<model.TimeEntry> query = session.createQuery(hql, model.TimeEntry.class);
+            query.setParameter("caseId", caseId);
+            return query.list();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        } finally {
+            if (session != null) {
+                session.close();
+            }
+        }
+    }
+
+    public List<model.TimeEntry> getTimeEntriesByAttorneyId(int attorneyId) {
+        Session session = null;
+        try {
+            session = HibernateUtil.getSessionFactory().openSession();
+            String hql = "FROM TimeEntry te WHERE te.attorney.id = :attorneyId";
+            org.hibernate.query.Query<model.TimeEntry> query = session.createQuery(hql, model.TimeEntry.class);
+            query.setParameter("attorneyId", attorneyId);
+            return query.list();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        } finally {
+            if (session != null) {
+                session.close();
+            }
+        }
+    }
 }

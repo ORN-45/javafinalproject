@@ -145,9 +145,24 @@ public class UserEditorDialog extends JDialog {
         roleLabel.setFont(UIConstants.LABEL_FONT);
         formPanel.add(roleLabel, labelConstraints);
         
-        String[] roles = userController.getUserRoles();
-        roleCombo = new JComboBox<>(roles);
+        roleCombo = new JComboBox<>();
         roleCombo.setFont(UIConstants.NORMAL_FONT);
+        try {
+            String[] roles = userController.getUserRoles();
+            for (String role : roles) {
+                roleCombo.addItem(role);
+            }
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading roles: " + re.getMessage(), "Connection Error");
+            // Add default roles as a fallback or disable the combo
+            roleCombo.addItem("Staff"); // Example fallback
+            roleCombo.addItem("Attorney");
+            roleCombo.addItem("Admin");
+        } catch (Exception e) { // Catch other potential exceptions
+            System.err.println("UserEditorDialog: Error loading roles (general): " + e.getMessage());
+            SwingUtils.showErrorMessage(this, "An unexpected error occurred while loading roles.", "Error");
+            roleCombo.addItem("Staff"); // Fallback
+        }
         formPanel.add(roleCombo, fieldConstraints);
         
         // Active status
@@ -282,9 +297,17 @@ public class UserEditorDialog extends JDialog {
         // Check username availability for new users
         if (isNewUser) {
             String username = usernameField.getText().trim();
-            if (userController.isUsernameExists(username)) {
-                showError("Username already exists. Please choose a different username.");
-                usernameField.requestFocus();
+            try {
+                if (userController.isUsernameExists(username)) {
+                    showError("Username already exists. Please choose a different username.");
+                    usernameField.requestFocus();
+                    return false;
+                }
+            } catch (RemoteException re) {
+                showError("Error checking username availability (connection): " + re.getMessage() + "\nPlease try again.");
+                return false; // Block saving if server check fails
+            } catch (Exception e) {
+                showError("An unexpected error occurred while checking username: " + e.getMessage());
                 return false;
             }
         }
@@ -359,29 +382,46 @@ public class UserEditorDialog extends JDialog {
             user.setRole((String) roleCombo.getSelectedItem());
             user.setActive(activeCheckbox.isSelected());
             
-            boolean success;
+            String operationMessage = ""; // To hold specific success/failure messages
+            boolean success = false;
+
             if (isNewUser) {
-                // Create new user with password
-                String password = new String(passwordField.getPassword());
-                User createdUser = userController.createUser(user, password);
-                success = (createdUser != null);
-                if (success) {
-                    user = createdUser; // Get the user with ID
+                user.setPassword(new String(passwordField.getPassword())); // Set password on DTO for creation
+                User createdUserDto = userController.createUser(user); // Now returns User DTO
+                if (createdUserDto != null && createdUserDto.getId() != 0) {
+                    this.user = createdUserDto; // Update dialog's user instance with ID and other server-set fields
+                    success = true;
+                    operationMessage = "User created successfully with ID: " + createdUserDto.getId();
+                } else {
+                    // This path might be taken if controller returns null or DTO without ID on failure
+                    operationMessage = "User creation failed (controller did not return valid user).";
                 }
             } else {
                 // Update existing user
-                success = userController.updateUser(user);
+                String updateResultStr = userController.updateUser(user); // Returns String
+                if (updateResultStr != null && updateResultStr.toLowerCase().contains("success")) {
+                    success = true;
+                    operationMessage = updateResultStr;
+                } else {
+                    operationMessage = updateResultStr != null ? updateResultStr : "Failed to update user.";
+                }
             }
             
             if (success) {
                 userSaved = true;
+                SwingUtils.showInfoMessage(this, operationMessage, "Save Successful");
                 dispose();
             } else {
-                showError("Failed to save user. Please try again.");
+                showError(operationMessage.isEmpty() ? "Failed to save user. Please try again." : operationMessage);
             }
             
+        } catch (RemoteException re) {
+            showError("Error communicating with server: " + re.getMessage());
+            re.printStackTrace();
+        } catch (IllegalArgumentException iae) { // Catch specific validation errors from controller
+            showError(iae.getMessage());
         } catch (Exception e) {
-            showError("Error saving user: " + e.getMessage());
+            showError("An unexpected error occurred while saving user: " + e.getMessage());
             e.printStackTrace();
         }
     }

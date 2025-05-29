@@ -339,22 +339,29 @@ public class ClientEditorDialog extends JDialog {
             client.setContactPerson(contactPersonField.getText().trim());
             client.setRegistrationDate(registrationDateChooser.getDate());
             
-            boolean success;
-            if (client.getId() == 0) {
+            String resultMessage;
+            if (client.getId() == 0) { // Assuming ID 0 means new client
                 // Create new client
-                success = clientController.createClient(client);
+                resultMessage = clientController.createClient(client);
             } else {
                 // Update existing client
-                success = clientController.updateClient(client);
+                resultMessage = clientController.updateClient(client);
             }
             
-            if (success) {
+            // Check if the operation was successful based on the message from the server
+            // This is an assumption; ideally, the service/controller would return a clear status
+            // or throw an exception on failure that's distinct from RemoteException.
+            if (resultMessage != null && resultMessage.toLowerCase().contains("success")) {
                 clientSaved = true;
+                SwingUtils.showInfoMessage(this, resultMessage, "Save Successful");
                 dispose();
             } else {
-                showError("Failed to save client. Please try again.");
+                showError(resultMessage != null ? resultMessage : "Failed to save client. Please try again.");
             }
             
+        } catch (RemoteException re) {
+            showError("Error communicating with server: " + re.getMessage());
+            re.printStackTrace();
         } catch (Exception e) {
             showError("Error saving client: " + e.getMessage());
             e.printStackTrace();

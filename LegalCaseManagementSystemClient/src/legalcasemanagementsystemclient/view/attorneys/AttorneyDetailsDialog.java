@@ -5,21 +5,33 @@ import javax.swing.border.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
+import java.rmi.RemoteException;
 
-import model.Attorney;
-import model.Case;
+// Client-side DTOs
+import model.Attorney; // This is client.model.Attorney
+import model.Case;     // This is client.model.Case 
+
+// Server-side Models (aliased)
+import legalcasemanagementsystemserver.model.Case_SERVER;
+import legalcasemanagementsystemserver.model.Attorney_SERVER; // For mapping within Case DTO if needed
+
 import controller.AttorneyController;
+import controller.CaseController; // To fetch cases
 import view.util.UIConstants;
 import view.components.CustomTable;
-import view.cases.CaseDetailsDialog;
+import view.cases.CaseDetailsDialog; // For viewing a specific case
 import view.util.SwingUtils;
+
 
 /**
  * Dialog for viewing attorney details and related cases.
  */
 public class AttorneyDetailsDialog extends JDialog {
-    private Attorney attorney;
+    private Attorney attorney; // This is client.model.Attorney DTO
     private AttorneyController attorneyController;
+    private CaseController caseController; // Added
     
     private JPanel attorneyInfoPanel;
     private JPanel casesPanel;
@@ -273,13 +285,13 @@ public class AttorneyDetailsDialog extends JDialog {
      */
     private void loadAttorneyData() {
         try {
-            // Get attorney with cases
-            Attorney attorneyWithCases = attorneyController.getAttorneyWithCases(attorney.getId());
-            if (attorneyWithCases != null) {
-                this.attorney = attorneyWithCases;
+            // this.attorney is the DTO passed in or updated.
+            // Populate attorney information fields directly from this.attorney DTO
+            if (this.attorney == null) {
+                SwingUtils.showErrorMessage(this, "No attorney data to display.", "Error");
+                return;
             }
-            
-            // Update attorney information fields
+
             JLabel attorneyIdValue = (JLabel) findComponentByName(attorneyInfoPanel, "attorneyId");
             JLabel nameValue = (JLabel) findComponentByName(attorneyInfoPanel, "name");
             JLabel specializationValue = (JLabel) findComponentByName(attorneyInfoPanel, "specialization");
@@ -296,12 +308,34 @@ public class AttorneyDetailsDialog extends JDialog {
             phoneValue.setText(attorney.getPhone() != null ? attorney.getPhone() : "N/A");
             hourlyRateValue.setText(String.format("$%.2f", attorney.getHourlyRate()));
             
-            // Load cases
+            // Load cases assigned to this attorney
             casesTable.clearTable();
-            List<Case> cases = attorney.getCases();
-            if (cases != null && !cases.isEmpty()) {
-                for (Case cse : cases) {
-                    String clientName = cse.getClient() != null ? cse.getClient().getName() : "Unknown";
+            if (this.caseController == null) {
+                this.caseController = new CaseController();
+            }
+
+            // CaseController.getAllCases() returns List<server.model.Case_SERVER>
+            // We need to map these to client.model.Case DTOs and then filter.
+            List<Case_SERVER> serverCases = caseController.getAllCases();
+            List<Case> attorneyCaseDTOs = new ArrayList<>();
+
+            if (serverCases != null) {
+                for (Case_SERVER serverCase : serverCases) {
+                    if (serverCase.getAttorneys() != null) {
+                        for (legalcasemanagementsystemserver.model.Attorney serverAttInCase : serverCase.getAttorneys()) {
+                            if (serverAttInCase.getId() == this.attorney.getId()) {
+                                attorneyCaseDTOs.add(mapServerCaseToClientCaseDTO(serverCase));
+                                break; // Found this attorney in this case
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!attorneyCaseDTOs.isEmpty()) {
+                for (Case cse : attorneyCaseDTOs) { // cse is now client.model.Case DTO
+                    String clientName = cse.getClient() != null ? cse.getClient().getName() : 
+                                       (cse.getClientId() > 0 ? "Client #" + cse.getClientId() : "N/A");
                     Object[] row = {
                         cse.getCaseNumber(),
                         cse.getTitle(),
@@ -314,12 +348,11 @@ public class AttorneyDetailsDialog extends JDialog {
                 }
             }
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error loading attorney data: " + e.getMessage(),
-                "Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error loading attorney data: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -366,30 +399,29 @@ public class AttorneyDetailsDialog extends JDialog {
         String caseNumber = casesTable.getValueAt(selectedRow, 0).toString();
         
         try {
-            // Find the case in the current attorney's case list
-            Case selectedCase = null;
-            for (Case cse : attorney.getCases()) {
-                if (caseNumber.equals(cse.getCaseNumber())) {
-                    selectedCase = cse;
-                    break;
-                }
-            }
-            
-            if (selectedCase != null) {
-                // Open case details dialog
-                CaseDetailsDialog dialog = new CaseDetailsDialog(getOwner(), selectedCase);
+            // To get the selected Case DTO for CaseDetailsDialog:
+            // 1. Use caseController.getCaseByCaseNumber (which returns server.model.Case_SERVER)
+            // 2. Map it to a client.model.Case DTO.
+            if (this.caseController == null) this.caseController = new CaseController();
+            Case_SERVER serverCase = caseController.getCaseByCaseNumber(caseNumber);
+
+            if (serverCase != null) {
+                Case clientCaseDTO = mapServerCaseToClientCaseDTO(serverCase);
+                CaseDetailsDialog dialog = new CaseDetailsDialog(getOwner(), clientCaseDTO); // Pass DTO
                 dialog.setVisible(true);
                 
-                // Refresh attorney data after returning from case details
-                loadAttorneyData();
+                // Refresh attorney data if case details interaction could change attorney-related info
+                // (e.g. if a case was unassigned from attorney, though that's not a feature here)
+                // loadAttorneyData(); 
+            } else {
+                SwingUtils.showErrorMessage(this, "Could not find details for case: " + caseNumber, "Error");
             }
             
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error opening case details: " + e.getMessage(),
-                "Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error opening case details: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -405,18 +437,55 @@ public class AttorneyDetailsDialog extends JDialog {
             
             // Refresh data if attorney was saved
             if (dialog.isAttorneySaved()) {
-                // Get updated attorney
-                attorney = attorneyController.getAttorneyById(attorney.getId());
-                loadAttorneyData();
+                // AttorneyController.getAttorneyById returns a DTO, so this is correct.
+                this.attorney = attorneyController.getAttorneyById(this.attorney.getId()); 
+                loadAttorneyData(); // Reload all data for this attorney, including cases
             }
-            
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error communicating with server: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
         } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error editing attorney: " + e.getMessage(),
-                "Error"
-            );
+            SwingUtils.showErrorMessage(this, "Error editing attorney: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
+    }
+
+    // Basic Case Server-to-Client DTO mapper (should ideally be in a shared location or CaseController)
+    // This is a simplified version. Assumes client.model.Case and server.model.Case_SERVER exist.
+    private Case mapServerCaseToClientCaseDTO(Case_SERVER serverCase) {
+        if (serverCase == null) return null;
+        Case clientCaseDTO = new Case(); // client.model.Case
+        clientCaseDTO.setId(serverCase.getId());
+        clientCaseDTO.setCaseNumber(serverCase.getCaseNumber());
+        clientCaseDTO.setTitle(serverCase.getTitle());
+        clientCaseDTO.setCaseType(serverCase.getCaseType());
+        clientCaseDTO.setStatus(serverCase.getStatus());
+        // clientCaseDTO.setDescription(serverCase.getDescription()); // Assuming client.model.Case has these
+        clientCaseDTO.setFileDate(serverCase.getFileDate());
+        // clientCaseDTO.setClosingDate(serverCase.getClosingDate());
+        clientCaseDTO.setCourt(serverCase.getCourt());
+        // clientCaseDTO.setJudge(serverCase.getJudge());
+        
+        if (serverCase.getClient() != null) {
+            clientCaseDTO.setClientId(serverCase.getClient().getId());
+            // If client.model.Case DTO has a full client.model.Client DTO field:
+            // model.Client caseClientDto = new model.Client(); // client.model.Client
+            // caseClientDto.setId(serverCase.getClient().getId());
+            // caseClientDto.setName(serverCase.getClient().getName()); 
+            // clientCaseDTO.setClient(caseClientDto);
+        }
+        
+        // For attorneys in a case DTO
+        if (serverCase.getAttorneys() != null && clientCaseDTO.getAttorneys() != null) { // Assuming clientCaseDTO has getAttorneys()
+            for (Attorney_SERVER serverAtt : serverCase.getAttorneys()) {
+                Attorney clientAtt = new Attorney(); // client.model.Attorney
+                clientAtt.setId(serverAtt.getId());
+                clientAtt.setFirstName(serverAtt.getFirstName());
+                clientAtt.setLastName(serverAtt.getLastName());
+                // ... other attorney fields ...
+                clientCaseDTO.getAttorneys().add(clientAtt);
+            }
+        }
+        return clientCaseDTO;
     }
 }

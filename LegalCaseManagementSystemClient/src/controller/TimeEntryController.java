@@ -1,63 +1,87 @@
 package controller;
 
-import dao.TimeEntryDao;
-import model.TimeEntry;
+// Assuming model.TimeEntry is compatible with server's model.TimeEntry
+import model.TimeEntry; 
+import service.remote.TimeEntryService; // Interface from the server project
 
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
 import java.util.List;
+import java.rmi.RemoteException; 
 
 /**
- * Controller class for TimeEntry operations.
+ * Controller class for TimeEntry operations using RMI.
  */
 public class TimeEntryController {
-    private TimeEntryDao timeEntryDao;
+    private TimeEntryService timeEntryService; // RMI service stub
 
     public TimeEntryController() {
-        this.timeEntryDao = new TimeEntryDao();
-    }
-
-    /**
-     * Register (save) a new time entry
-     */
-    public String createTimeEntry(TimeEntry timeEntry) {
-        if (timeEntry == null) {
-            return "TimeEntry cannot be null";
+        try {
+            Registry registry = LocateRegistry.getRegistry("localhost", 1099);
+            this.timeEntryService = (TimeEntryService) registry.lookup("TimeEntryService");
+        } catch (Exception e) {
+            System.err.println("TimeEntryController: Error looking up TimeEntryService: " + e.getMessage());
+            e.printStackTrace();
+            // timeEntryService will be null, methods should handle this.
         }
-        return timeEntryDao.registerTimeEntry(timeEntry);
     }
 
     /**
-     * Update an existing time entry
+     * Record a new time entry.
      */
-    public String updateTimeEntry(TimeEntry timeEntry) {
+    public String recordTimeEntry(TimeEntry timeEntry) throws RemoteException {
+        if (this.timeEntryService == null) throw new RemoteException("TimeEntryService not initialized.");
         if (timeEntry == null) {
-            return "TimeEntry cannot be null";
+            throw new IllegalArgumentException("TimeEntry cannot be null");
         }
-        return timeEntryDao.updateTimeEntry(timeEntry);
+        return timeEntryService.recordTimeEntry(timeEntry);
     }
 
     /**
-     * Delete a time entry
+     * Update an existing time entry.
      */
-    public String deleteTimeEntry(TimeEntry timeEntry) {
+    public String updateTimeEntry(TimeEntry timeEntry) throws RemoteException {
+        if (this.timeEntryService == null) throw new RemoteException("TimeEntryService not initialized.");
         if (timeEntry == null) {
-            return "TimeEntry cannot be null";
+            throw new IllegalArgumentException("TimeEntry cannot be null");
         }
-        return timeEntryDao.deleteTimeEntry(timeEntry);
+        return timeEntryService.updateTimeEntry(timeEntry);
     }
 
     /**
-     * Retrieve a time entry by its ID
+     * Delete a time entry.
      */
-    public TimeEntry getTimeEntryById(int id) {
-        TimeEntry temp = new TimeEntry();
-        temp.setId(id);
-        return timeEntryDao.retrieveById(temp);
+    public String deleteTimeEntry(TimeEntry timeEntry) throws RemoteException {
+        if (this.timeEntryService == null) throw new RemoteException("TimeEntryService not initialized.");
+        if (timeEntry == null) {
+            throw new IllegalArgumentException("TimeEntry cannot be null");
+        }
+        return timeEntryService.deleteTimeEntry(timeEntry);
     }
 
     /**
-     * Retrieve all time entries
+     * Retrieve a time entry by its ID.
      */
-    public List<TimeEntry> getAllTimeEntries() {
-        return timeEntryDao.retrieveAll();
+    public TimeEntry getTimeEntryById(int id) throws RemoteException {
+        if (this.timeEntryService == null) throw new RemoteException("TimeEntryService not initialized.");
+        return timeEntryService.getTimeEntryById(id);
     }
+
+    /**
+     * Retrieve time entries by case ID.
+     */
+    public List<TimeEntry> getTimeEntriesByCaseId(int caseId) throws RemoteException {
+        if (this.timeEntryService == null) throw new RemoteException("TimeEntryService not initialized.");
+        return timeEntryService.getTimeEntriesByCaseId(caseId);
+    }
+
+    /**
+     * Retrieve time entries by attorney ID.
+     */
+    public List<TimeEntry> getTimeEntriesByAttorneyId(int attorneyId) throws RemoteException {
+        if (this.timeEntryService == null) throw new RemoteException("TimeEntryService not initialized.");
+        return timeEntryService.getTimeEntriesByAttorneyId(attorneyId);
+    }
+
+    // Method getAllTimeEntries() was removed as it's not directly supported by TimeEntryService.
 }

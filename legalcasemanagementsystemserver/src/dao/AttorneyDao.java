@@ -56,13 +56,13 @@ public class AttorneyDao {
 }
          public List<Attorney> retrieveAll(){
              Session ss= HibernateUtil.getSessionFactory().openSession();
-             List<Attorney> attorneyList= ss.createQuery("select  ord from attorney ord").list();
+             List<Attorney> attorneyList= ss.createQuery("select  ord from Attorney ord").list(); // Corrected HQL
              ss.close();
              return attorneyList;
           }
          public Attorney retrieveById(Attorney attorney){
         Session ss= HibernateUtil.getSessionFactory().openSession();
-        Attorney attorneys = (Attorney)ss.get(Attorney.class, attorney.getAttorneyId());
+        Attorney attorneys = (Attorney)ss.get(Attorney.class, attorney.getId()); // Corrected to use getId()
         ss.close();
         return attorneys;
     }  

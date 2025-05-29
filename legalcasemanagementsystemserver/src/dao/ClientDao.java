@@ -56,13 +56,13 @@ public class ClientDao {
 }
          public List<Client> retrieveAll(){
              Session ss= HibernateUtil.getSessionFactory().openSession();
-             List<Client> clientList= ss.createQuery("select  ord from client ord").list();
+             List<Client> clientList= ss.createQuery("select  ord from Client ord").list(); // Corrected HQL
              ss.close();
              return clientList;
           }
          public Client retrieveById(Client client){
         Session ss= HibernateUtil.getSessionFactory().openSession();
-        Client clients = (Client)ss.get(Client.class, client.getClientId());
+        Client clients = (Client)ss.get(Client.class, client.getId()); // Corrected to use getId()
         ss.close();
         return clients;
     }  

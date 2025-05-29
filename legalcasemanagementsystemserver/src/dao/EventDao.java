@@ -56,14 +56,51 @@ public class EventDao {
 }
          public List<Event> retrieveAll(){
              Session ss= HibernateUtil.getSessionFactory().openSession();
-             List<Event> eventList= ss.createQuery("select  eve from event eve").list();
+             List<Event> eventList= ss.createQuery("select  eve from Event eve").list(); // Corrected HQL
              ss.close();
              return eventList;
           }
          public Event retrieveById(Event event){
         Session ss= HibernateUtil.getSessionFactory().openSession();
-        Event events = (Event)ss.get(Event.class, event.getEventId());
+        Event events = (Event)ss.get(Event.class, event.getId()); // Corrected to use getId()
         ss.close();
         return events;
     }  
+
+    public List<Event> getEventsByCaseId(int caseId) {
+        Session session = null;
+        try {
+            session = HibernateUtil.getSessionFactory().openSession();
+            String hql = "FROM Event e WHERE e.associatedCase.id = :caseId";
+            org.hibernate.query.Query<Event> query = session.createQuery(hql, Event.class);
+            query.setParameter("caseId", caseId);
+            return query.list();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null; 
+        } finally {
+            if (session != null) {
+                session.close();
+            }
+        }
+    }
+
+    public List<Event> getEventsByDateRange(java.time.LocalDate startDate, java.time.LocalDate endDate) {
+        Session session = null;
+        try {
+            session = HibernateUtil.getSessionFactory().openSession();
+            String hql = "FROM Event e WHERE e.eventDate BETWEEN :startDate AND :endDate";
+            org.hibernate.query.Query<Event> query = session.createQuery(hql, Event.class);
+            query.setParameter("startDate", startDate);
+            query.setParameter("endDate", endDate);
+            return query.list();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        } finally {
+            if (session != null) {
+                session.close();
+            }
+        }
+    }
 }

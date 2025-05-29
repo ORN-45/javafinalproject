@@ -192,19 +192,20 @@ public class EventDetailsDialog extends JDialog {
      */
     private void loadEventDetails() {
         if (event == null) {
+            SwingUtils.showErrorMessage(this, "Event data is not available.", "Error");
             return;
         }
         
+        Case associatedCaseDto = null; // This will be client.model.Case DTO
         try {
-            // Load associated case if needed
-            Case associatedCase = null;
-            if (event.getCase() == null && event.getCaseId() > 0) {
-                associatedCase = caseController.getCaseById(event.getCaseId());
-                event.setCase(associatedCase);
-            } else {
-                associatedCase = event.getCase();
+            // Load associated case DTO if caseId is present
+            if (event.getCaseId() > 0) {
+                associatedCaseDto = caseController.getCaseById(event.getCaseId());
             }
-            
+            // Note: The client.model.Event DTO itself does not store a Case object, only caseId.
+            // So, event.getCase() would be null or non-existent on the DTO.
+            // We use associatedCaseDto obtained from caseController.
+
             // Get the parent container
             Container parent = infoPanel.getParent();
             
@@ -279,9 +280,12 @@ public class EventDetailsDialog extends JDialog {
             }
             
             // Add case information
-            String caseInfo = "Unknown";
-            if (associatedCase != null) {
-                caseInfo = associatedCase.getCaseNumber() + " - " + associatedCase.getTitle();
+            String caseInfo = "N/A";
+            if (associatedCaseDto != null) {
+                caseInfo = (associatedCaseDto.getCaseNumber() != null ? associatedCaseDto.getCaseNumber() : "ID: " + associatedCaseDto.getId()) + 
+                           (associatedCaseDto.getTitle() != null ? " - " + associatedCaseDto.getTitle() : "");
+            } else if (event.getCaseId() > 0) {
+                caseInfo = "Case ID: " + event.getCaseId() + " (Details not found)";
             }
             addDetailField(infoPanel, "Related Case:", caseInfo, labelConstraints, valueConstraints);
             
@@ -344,12 +348,11 @@ public class EventDetailsDialog extends JDialog {
             infoPanel.revalidate();
             infoPanel.repaint();
             
-        } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error loading event details: " + e.getMessage(),
-                "Error"
-            );
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading event details (connection): " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
+        } catch (Exception e) { // Catch other unexpected errors
+            SwingUtils.showErrorMessage(this, "An unexpected error occurred loading event details: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }

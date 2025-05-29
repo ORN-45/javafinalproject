@@ -56,7 +56,7 @@ public class CaseDao {
 }
          public List<Case> retrieveAll(){
              Session ss= HibernateUtil.getSessionFactory().openSession();
-             List<Case> casesList= ss.createQuery("select  cas from cases cas").list();
+             List<Case> casesList= ss.createQuery("FROM Case cas").list(); // Corrected HQL
              ss.close();
              return casesList;
           }
@@ -81,5 +81,43 @@ public List<Case> findCasesByStatus(String status) {
             .list();
         session.close();
         return cases;
+    }
+
+    public model.Case findByCaseNumber(String caseNumber) {
+        Session session = null;
+        try {
+            session = HibernateUtil.getSessionFactory().openSession();
+            String hql = "FROM Case c WHERE c.caseNumber = :caseNumber";
+            org.hibernate.query.Query<model.Case> query = session.createQuery(hql, model.Case.class);
+            query.setParameter("caseNumber", caseNumber);
+            return query.uniqueResult();
+        } catch (Exception e) {
+            e.printStackTrace();
+            // Consider logging the error or throwing a custom DAO exception
+            return null;
+        } finally {
+            if (session != null && session.isOpen()) {
+                session.close();
+            }
+        }
+    }
+
+    public java.util.List<model.Case> findByTitle(String title) {
+        Session session = null;
+        try {
+            session = HibernateUtil.getSessionFactory().openSession();
+            String hql = "FROM Case c WHERE lower(c.title) LIKE lower(:title)";
+            org.hibernate.query.Query<model.Case> query = session.createQuery(hql, model.Case.class);
+            query.setParameter("title", "%" + title + "%");
+            return query.list();
+        } catch (Exception e) {
+            e.printStackTrace();
+            // Consider logging the error or throwing a custom DAO exception
+            return new java.util.ArrayList<>(); // Return empty list on error
+        } finally {
+            if (session != null && session.isOpen()) {
+                session.close();
+            }
+        }
     }
 }

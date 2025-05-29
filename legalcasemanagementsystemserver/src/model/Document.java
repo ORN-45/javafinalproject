@@ -28,6 +28,14 @@ public class Document implements Serializable{
     @JoinColumn(name = "case_id", nullable = false)
     private Case associatedCase;
 
+    // New fields for file content and metadata
+    @Lob
+    @Basic(fetch = FetchType.LAZY) // Good practice for large data
+    private byte[] fileContent;
+
+    private String fileName;
+    private String fileType; // MIME type
+
     /**
      * Default constructor
      */
@@ -155,6 +163,31 @@ public class Document implements Serializable{
 
     public void setAssociatedCase(Case associatedCase) {
         this.associatedCase = associatedCase;
+    }
+
+    // Getters and setters for new fields
+    public byte[] getFileContent() {
+        return fileContent;
+    }
+
+    public void setFileContent(byte[] fileContent) {
+        this.fileContent = fileContent;
+    }
+
+    public String getFileName() {
+        return fileName;
+    }
+
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
+    }
+
+    public String getFileType() {
+        return fileType;
+    }
+
+    public void setFileType(String fileType) {
+        this.fileType = fileType;
     }
 
     // ====== Utility Methods ======

@@ -31,13 +31,17 @@ public class CalendarPanel extends JPanel {
     private LocalDate selectedDate;
     private JPanel calendarGrid;
     private JLabel monthYearLabel;
-    private Map<LocalDate, List<Event>> eventsByDate;
+    private Map<LocalDate, List<Event>> eventsByDate; // Will store client.model.Event DTOs
     
     // UI components for event display
     private JPanel eventDetailsPanel;
-    private JList<Event> dayEventsList;
-    private DefaultListModel<Event> eventsListModel;
+    private JList<Event> dayEventsList; // Will hold client.model.Event DTOs
+    private DefaultListModel<Event> eventsListModel; // For client.model.Event DTOs
     private JLabel selectedDateLabel;
+
+    // Filter components as class members
+    private JComboBox<String> viewTypeCombo;
+    private JComboBox<CaseItem> caseCombo; // Using CaseItem to store Case DTOs
     
     /**
      * Constructor
@@ -177,22 +181,37 @@ public class CalendarPanel extends JPanel {
         JLabel viewByLabel = new JLabel("View:");
         viewByLabel.setFont(UIConstants.NORMAL_FONT);
         
-        JComboBox<String> viewTypeCombo = new JComboBox<>(new String[]{"All Events", "Court Dates", "Meetings", "Deadlines"});
+        viewTypeCombo = new JComboBox<>(); // Now a class member
         viewTypeCombo.setFont(UIConstants.NORMAL_FONT);
-        viewTypeCombo.addActionListener(e -> {
-            // Filter events based on selection
-            loadEvents();
-        });
+        viewTypeCombo.addItem("All Events"); // Default first
+        try {
+            String[] types = eventController.getEventTypes(); // Returns String[]
+            for (String type : types) {
+                viewTypeCombo.addItem(type);
+            }
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading event types: " + re.getMessage(), "Connection Error");
+        }
+        viewTypeCombo.addActionListener(e -> loadEvents());
         
         JLabel caseLabel = new JLabel("Case:");
         caseLabel.setFont(UIConstants.NORMAL_FONT);
         
-        JComboBox<String> caseCombo = new JComboBox<>(new String[]{"All Cases"});
+        caseCombo = new JComboBox<>(); // Now a class member
         caseCombo.setFont(UIConstants.NORMAL_FONT);
-        caseCombo.addActionListener(e -> {
-            // Filter events based on case selection
-            loadEvents();
-        });
+        caseCombo.addItem(new CaseItem(null, "All Cases")); // Special item for "All Cases"
+        try {
+            // CaseController.getAllCases() returns List<client.model.Case> DTOs
+            List<Case> cases = caseController.getAllCases(); 
+            if (cases != null) {
+                for (Case legalCase : cases) {
+                    caseCombo.addItem(new CaseItem(legalCase));
+                }
+            }
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading cases for filter: " + re.getMessage(), "Connection Error");
+        }
+        caseCombo.addActionListener(e -> loadEvents());
         
         // Add components to filter panel
         filterPanel.add(viewByLabel);
@@ -554,11 +573,30 @@ public class CalendarPanel extends JPanel {
             int lastDayOfWeek = endDate.getDayOfWeek().getValue() % 7;
             endDate = endDate.plusDays(6 - lastDayOfWeek);
             
-            // Get events for the date range
-            List<Event> events = eventController.findEventsByDateRange(startDate, endDate);
+            // Get events for the date range (EventController returns List<client.model.Event> DTOs)
+            List<Event> allEventsInRange = eventController.getEventsByDateRange(startDate, endDate);
             
-            // Organize events by date
-            for (Event event : events) {
+            // Apply filters
+            String selectedEventType = (String) viewTypeCombo.getSelectedItem();
+            CaseItem selectedCaseItem = (CaseItem) caseCombo.getSelectedItem();
+            
+            List<Event> filteredEvents = allEventsInRange;
+
+            if (selectedEventType != null && !"All Events".equals(selectedEventType)) {
+                filteredEvents = filteredEvents.stream()
+                    .filter(event -> selectedEventType.equals(event.getEventType()))
+                    .collect(Collectors.toList());
+            }
+
+            if (selectedCaseItem != null && selectedCaseItem.getCase() != null) { // Not "All Cases"
+                int targetCaseId = selectedCaseItem.getCase().getId();
+                filteredEvents = filteredEvents.stream()
+                    .filter(event -> event.getCaseId() == targetCaseId)
+                    .collect(Collectors.toList());
+            }
+            
+            // Organize filtered events by date
+            for (Event event : filteredEvents) {
                 LocalDate eventDate = event.getEventDate();
                 if (eventDate != null) {
                     List<Event> dateEvents = eventsByDate.computeIfAbsent(eventDate, k -> new ArrayList<>());
@@ -567,15 +605,14 @@ public class CalendarPanel extends JPanel {
             }
             
             // Update calendar and event list
-            updateCalendarView();
-            loadEventsForSelectedDate();
+            updateCalendarView(); // This uses eventsByDate to populate cells
+            loadEventsForSelectedDate(); // This uses eventsByDate for the selected date's list
             
-        } catch (Exception e) {
-            SwingUtils.showErrorMessage(
-                this,
-                "Error loading events: " + e.getMessage(),
-                "Database Error"
-            );
+        } catch (RemoteException re) {
+            SwingUtils.showErrorMessage(this, "Error loading events: " + re.getMessage(), "Connection Error");
+            re.printStackTrace();
+        } catch (Exception e) { // Catch other unexpected errors
+            SwingUtils.showErrorMessage(this, "An unexpected error occurred while loading events: " + e.getMessage(), "Application Error");
             e.printStackTrace();
         }
     }
@@ -705,32 +742,21 @@ public class CalendarPanel extends JPanel {
         
         if (confirmed) {
             try {
-                // Delete the event
-                boolean success = eventController.deleteEvent(selectedEvent.getId());
+                // Delete the event (eventController.deleteEvent takes eventId)
+                String resultMessage = eventController.deleteEvent(selectedEvent.getId());
                 
-                if (success) {
-                    SwingUtils.showInfoMessage(
-                        this,
-                        "Event deleted successfully.",
-                        "Success"
-                    );
-                    
-                    // Refresh events
-                    loadEvents();
+                if (resultMessage != null && resultMessage.toLowerCase().contains("success")) {
+                    SwingUtils.showInfoMessage(this, resultMessage, "Success");
+                    loadEvents(); // Refresh events
                 } else {
-                    SwingUtils.showErrorMessage(
-                        this,
-                        "Failed to delete event.",
-                        "Deletion Error"
-                    );
+                    SwingUtils.showErrorMessage(this, resultMessage != null ? resultMessage : "Failed to delete event.", "Deletion Error");
                 }
                 
+            } catch (RemoteException re) {
+                SwingUtils.showErrorMessage(this, "Error deleting event (connection): " + re.getMessage(), "Connection Error");
+                re.printStackTrace();
             } catch (Exception e) {
-                SwingUtils.showErrorMessage(
-                    this,
-                    "Error deleting event: " + e.getMessage(),
-                    "Database Error"
-                );
+                SwingUtils.showErrorMessage(this, "Error deleting event: " + e.getMessage(), "Application Error");
                 e.printStackTrace();
             }
         }
@@ -743,37 +769,80 @@ public class CalendarPanel extends JPanel {
         @Override
         public Component getListCellRendererComponent(JList<?> list, Object value, 
                 int index, boolean isSelected, boolean cellHasFocus) {
-            super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+            // It's good practice to call super method first
+            JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
             
-            if (value instanceof Event) {
+            if (value instanceof Event) { // value is client.model.Event DTO
                 Event event = (Event) value;
                 
-                // Format the time if available
                 String timeText = "";
                 if (event.getStartTime() != null) {
                     DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("h:mm a");
                     timeText = event.getStartTime().format(timeFormatter);
-                    
                     if (event.getEndTime() != null) {
                         timeText += " - " + event.getEndTime().format(timeFormatter);
                     }
-                    
                     timeText += " • ";
                 }
                 
-                // Set text with time and title
-                setText(timeText + event.getTitle());
+                label.setText("<html><b>" + timeText + event.getTitle() + "</b>" + 
+                             (event.getLocation() != null && !event.getLocation().isEmpty() ? "<br/><i><font color='gray'>" + event.getLocation() + "</font></i>" : "") +
+                             "</html>");
                 
-                // Set icon based on event type
-                // (You can add icons later)
-                
-                // Set foreground color based on event type if not selected
                 if (!isSelected) {
-                    setForeground(getEventTypeColor(event.getEventType()));
+                    label.setForeground(getEventTypeColor(event.getEventType()));
                 }
+                // Add a small top margin for better spacing if needed
+                label.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
             }
             
-            return this;
+            return label;
+        }
+    }
+
+    // Helper class for Case JComboBox
+    private static class CaseItem {
+        private Case legalCase; // client.model.Case DTO
+        private String displayText;
+
+        public CaseItem(Case legalCase) {
+            this.legalCase = legalCase;
+            if (legalCase != null) {
+                this.displayText = (legalCase.getCaseNumber() != null ? legalCase.getCaseNumber() + " - " : "") +
+                                   (legalCase.getTitle() != null ? legalCase.getTitle() : "Case ID " + legalCase.getId());
+            } else {
+                this.displayText = "Unknown Case";
+            }
+        }
+        
+        public CaseItem(Case legalCase, String customText) {
+            this.legalCase = legalCase;
+            this.displayText = customText;
+        }
+
+        public Case getCase() {
+            return legalCase;
+        }
+
+        @Override
+        public String toString() {
+            return displayText;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            CaseItem caseItem = (CaseItem) obj;
+            if (legalCase == null) {
+                return caseItem.legalCase == null && displayText.equals(caseItem.displayText);
+            }
+            return legalCase.getId() == caseItem.legalCase.getId();
+        }
+
+        @Override
+        public int hashCode() {
+            return legalCase != null ? Integer.hashCode(legalCase.getId()) : displayText.hashCode();
         }
     }
 }

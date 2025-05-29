@@ -56,13 +56,13 @@ public class PaymentDao {
 }
          public List<Payment> retrieveAll(){
              Session ss= HibernateUtil.getSessionFactory().openSession();
-             List<Payment> paymentList= ss.createQuery("select  ord from payment ord").list();
+             List<Payment> paymentList= ss.createQuery("select  ord from Payment ord").list(); // Corrected HQL
              ss.close();
              return paymentList;
           }
          public Payment retrieveById(Payment payment){
         Session ss= HibernateUtil.getSessionFactory().openSession();
-        Payment payments = (Payment)ss.get(Payment.class, payment.getPaymentId());
+        Payment payments = (Payment)ss.get(Payment.class, payment.getId()); // Corrected to use getId()
         ss.close();
         return payments;
     }  
